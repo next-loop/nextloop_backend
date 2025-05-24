@@ -1,0 +1,16 @@
+.env
+api/migrations
+api/models/__pycache__
+api/models/__pycache__/*
+api/controllers/__pycache__
+api/controllers/__pycache__/*
+api/__pycache__
+api/__pycache__/*
+nextloop_backend/__pycache__
+nextloop_backend/__pycache__/*
+api/cotrollers/__pycache__/*
+
+.DS_Store
+
+
+
