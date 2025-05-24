@@ -49,3 +49,8 @@ class ViewRegistrationInfoOut(Schema):
             title=obj.title,
             price=obj.price,
         )
+        
+        
+        
+
+# CREATE OR REPLACE VIEW view_registration_info AS SELECT api_courseregistration.id AS register_id, api_courseregistration.full_name, api_courseregistration.email, api_courseregistration.phone_number, api_courseregistration.referred_by, api_courseregistration.discounted_amount, api_courseregistration.registration_token, api_courses.id AS course_id, api_courses.title, api_courses.price FROM api_courseregistration, api_courses WHERE api_courseregistration.course_id = api_courses.id;
