@@ -29,7 +29,7 @@ load_dotenv()
 SECRET_KEY = 'django-insecure-7r2*ak-i(28n2p8$men4sh2@aur_szbzzify3^wb(tke3qv_d3'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
 
 ALLOWED_HOSTS = ["*"]
@@ -199,6 +199,6 @@ EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_USE_TLS = True
 EMAIL_PORT = 587
-EMAIL_HOST_USER = config("EMAIL_HOST_USER")
-EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD")
-DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL")
+EMAIL_HOST_USER = 'nexloopedutech@gmail.com'
+EMAIL_HOST_PASSWORD = 'uqqc rxej oley lias'
+DEFAULT_FROM_EMAIL = 'Nexloop'

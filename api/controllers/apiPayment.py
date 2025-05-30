@@ -1,32 +1,34 @@
 from ninja import Router
 from django.shortcuts import get_object_or_404
-from django.http import HttpResponse, JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.conf import settings
-import requests
-import json
-import uuid
-from datetime import datetime
-
+from django.core.mail import send_mail
 from api.models.payment import payment, paymentIn
 from api.models.courses import Courses
 from api.models.registration import CourseRegistration
+import razorpay
+import json
+from datetime import datetime
+from pydantic import BaseModel
+from typing import Optional
+from ninja.responses import Response
 
-from django.core.mail import send_mail
-from django.conf import settings
+# # Razorpay Configuration
+# RAZORPAY_KEY_ID = "rzp_test_QQd4iMqsM9ccBI"
+# RAZORPAY_KEY_SECRET = "WWKYxnbJvn4Y30aIvOGB4hGD"
+# razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
+
+# Razorpay Configuration
+RAZORPAY_KEY_ID = "rzp_live_rly0BJKgu8Z5zG"
+RAZORPAY_KEY_SECRET = "bAlyCxqVb9V9Exi3B3THCvrF"
+razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
 paymentrouter = Router(tags=["Payment APIs"])
-
-# Cashfree configuration
-CASHFREE_BASE_URL = "https://api.cashfree.com"
-CASHFREE_APP_ID = "77107481798f19dd72ae4279d1470177"
-CASHFREE_SECRET_KEY = "cfsk_ma_prod_c9c7c59366cd2247c9b04c54fb530be2_1b0e1aa0"
-
 
 @paymentrouter.post("/create-payment")
 def create_payment(request, data: paymentIn):
     try:
-        # Validate course and registration
         course = get_object_or_404(Courses, id=data.course)
         registration = get_object_or_404(CourseRegistration, id=data.courseregistration)
 
@@ -44,14 +46,14 @@ def create_payment(request, data: paymentIn):
                 }, status=400)
             else:
                 return JsonResponse({
-                    "message": "Pending payment already exists for this registration",
+                    "message": "Pending payment already exists",
                     "transaction_id": str(existing_payment.transaction_id),
                     "amount": existing_payment.payable_amount,
                     "status": "Pending",
-                    "payment_link": existing_payment.cashfree_payment_session_id
+                    "payment_link": None
                 }, status=200)
 
-        # Create payment without order_id (to avoid unique constraint violation)
+        # Create new payment entry
         payment_entry = payment.objects.create(
             course=course,
             courseregistration=registration,
@@ -61,144 +63,81 @@ def create_payment(request, data: paymentIn):
             order_id=None
         )
 
-        # Generate unique order_id from transaction_id
-        order_id = f"ORDER_{payment_entry.transaction_id}"
+        # Shorten the order_id to max 40 characters
+        short_receipt = f"ORD-{str(payment_entry.transaction_id)[:36]}"
 
-        print(f"[DEBUG] Transaction ID: {payment_entry.transaction_id}")
-        print(f"[DEBUG] Generated Order ID: {order_id}")
-
-        # Prepare Cashfree customer details
         customer_details = {
-            "customer_id": str(registration.id),
             "customer_email": registration.email,
-            "customer_phone": registration.phone_number,
+            "customer_phone": registration.phone_number
         }
 
-        # Create order via Cashfree
-        cashfree_response = create_cashfree_order(
-            order_id=order_id,
-            amount=payment_entry.payable_amount,
-            customer_details=customer_details
-        )
+        razorpay_response = create_razorpay_order(short_receipt, payment_entry.payable_amount, customer_details)
 
-        if not cashfree_response.get("success"):
+        if not razorpay_response.get("success"):
             payment_entry.delete()
-            print(f"[ERROR] Cashfree Order Failed: {cashfree_response}")
-            return JsonResponse({"error": "Failed to create payment order", "details": cashfree_response}, status=500)
+            return JsonResponse({"error": "Failed to create Razorpay order", "details": razorpay_response}, status=500)
 
-        # Update payment with order details
-        payment_entry.order_id = order_id
-        payment_entry.cashfree_payment_session_id = cashfree_response["data"].get("payment_session_id")
+        payment_entry.order_id = razorpay_response["data"].get("order_id")
+        payment_entry.cashfree_payment_session_id = razorpay_response["data"].get("order_id")
         payment_entry.save()
-
-        print(f"[INFO] Payment session created successfully for transaction {payment_entry.transaction_id}")
 
         return JsonResponse({
             "message": "Payment initialized",
             "transaction_id": str(payment_entry.transaction_id),
             "amount": payment_entry.payable_amount,
             "status": "Pending",
-            "payment_link": cashfree_response["data"].get("payment_link"),
-            "payment_session_id": cashfree_response["data"].get("payment_session_id")
+            "razorpay_order_id": razorpay_response["data"].get("order_id")
         }, status=201)
 
     except Exception as e:
-        print(f"[EXCEPTION] create_payment error: {str(e)}")
-        return JsonResponse({"error": "An unexpected error occurred", "details": str(e)}, status=500)
+        return JsonResponse({"error": "Unexpected error", "details": str(e)}, status=500)
 
 
-def create_cashfree_order(order_id, amount, customer_details):
-    """Helper to create Cashfree order"""
-    url = f"{CASHFREE_BASE_URL}/pg/orders"
-
-    headers = {
-        "Content-Type": "application/json",
-        "x-client-id": CASHFREE_APP_ID,
-        "x-client-secret": CASHFREE_SECRET_KEY,
-        "x-api-version": "2022-09-01"
-    }
-
-    payload = {
-        "order_id": order_id,
-        "order_amount": amount,
-        "order_currency": "INR",
-        "order_note": "Course registration payment",
-        "customer_details": customer_details,
-        "order_meta": {
-            "return_url": f"{settings.FRONTEND_URL}/payment/callback?order_id={order_id}"
-        }
-    }
-
+def create_razorpay_order(receipt, amount, customer_details):
     try:
-        response = requests.post(url, headers=headers, data=json.dumps(payload))
-        response_data = response.json()
-
-        print(f"[DEBUG] Cashfree API response: {response_data}")
-
-        if response.status_code == 200:
-            return {
-                "success": True,
-                "data": {
-                    "payment_session_id": response_data.get("payment_session_id"),
-                    "payment_link": response_data.get("payment_link")
-                }
-            }
-        else:
-            return {
-                "success": False,
-                "error": response_data.get("message", "Unknown error"),
-                "status_code": response.status_code
-            }
-
-    except Exception as e:
-        print(f"[EXCEPTION] create_cashfree_order error: {str(e)}")
+        razorpay_order = razorpay_client.order.create({
+            "amount": int(amount * 100),  # Convert to paise
+            "currency": "INR",
+            "receipt": receipt,
+            "payment_capture": 1,
+            "notes": customer_details
+        })
         return {
-            "success": False,
-            "error": str(e)
+            "success": True,
+            "data": {
+                "order_id": razorpay_order["id"],
+                "amount": razorpay_order["amount"],
+                "currency": razorpay_order["currency"]
+            }
         }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
+import logging
 
-from django.http import HttpResponse
-from django.core.mail import send_mail
-from django.conf import settings
-from django.shortcuts import get_object_or_404
-import json
+logger = logging.getLogger(__name__)
 
 @paymentrouter.post("/payment-webhook")
-def cashfree_webhook(request):
-    print("Webhook Called")
+def razorpay_webhook(request):
     try:
         payload = json.loads(request.body)
-        print("Webhook Payload:", payload)
+        event = payload.get("event")
+        payment_data = payload.get("payload", {}).get("payment", {}).get("entity", {})
 
-        data = payload.get("data", {})
-        order = data.get("order", {})
-        payment_data = data.get("payment", {})
+        razorpay_order_id = payment_data.get("order_id")
+        status = payment_data.get("status")
 
-        order_id = order.get("order_id")
-        payment_status = payment_data.get("payment_status")
-        failure_reason = payment_data.get("error_message", "Payment failed or status not SUCCESS")
+        payment_entry = get_object_or_404(payment, order_id=razorpay_order_id)
 
-        print(f"Order ID: {order_id}, Payment Status: {payment_status}")
-
-        transaction_uuid = order_id.replace("ORDER_", "")
-        payment_entry = get_object_or_404(payment, transaction_id=transaction_uuid)
-
-        # Always store the order ID
-        payment_entry.order_id = order_id
-
-        if payment_status == "SUCCESS":
+        if status == "captured":
             payment_entry.payment_status = True
             payment_entry.failure_reason = None
             payment_entry.save()
-            print("Payment marked as successful in DB")
 
             registration = payment_entry.courseregistration
             registration.is_paid = True
             registration.save()
-            print("Course registration marked as paid")
 
-            # HTML email template with referral code
             html_message = f"""
             <!DOCTYPE html>
             <html lang="en">
@@ -273,39 +212,26 @@ def cashfree_webhook(request):
             </body>
             </html>
             """
-
-            # Send HTML email
             send_mail(
-                subject="Payment Confirmation - Thank you for registering!",
-                message="Thank you for your payment. Please view this email in an HTML-capable email client.",
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[registration.email],
-                fail_silently=False,
-                html_message=html_message
+                "Payment Confirmation",
+                "Your payment is confirmed.",
+                settings.DEFAULT_FROM_EMAIL,
+                [registration.email],
+                html_message=html_message,
+                fail_silently=False
             )
-            print("Confirmation HTML email sent to user.")
-
         else:
             payment_entry.payment_status = False
-            payment_entry.failure_reason = failure_reason
+            payment_entry.failure_reason = payment_data.get("error_description", "Failed")
             payment_entry.save()
-            print(f"Payment failed or pending: {failure_reason}")
 
         return HttpResponse(status=200)
 
     except Exception as e:
-        print("Error occurred during webhook processing:", str(e))
-        return HttpResponse(status=500)
-    
-    
-
-from ninja import Router
-from ninja.responses import Response
-from typing import Optional
-from pydantic import BaseModel
+        logger.error(f"Webhook Error: {str(e)}", exc_info=True)
+        return JsonResponse({"error": "Webhook failed", "details": str(e)}, status=500)
 
 
-# ✅ Define the response schema
 class PaymentVerifyResponseSchema(BaseModel):
     status: str
     message: Optional[str] = None
@@ -317,43 +243,30 @@ class PaymentVerifyResponseSchema(BaseModel):
     customer_email: Optional[str] = None
     customer_phone: Optional[str] = None
 
-# ✅ GET /verify/{order_id}
-@paymentrouter.get("/verify/{order_id}", response=PaymentVerifyResponseSchema)
-def verify_payment(request, order_id: str):
-    try:
-        payment_details = payment.objects.select_related("course", "courseregistration").get(
-            cashfree_payment_session_id=order_id
-        )
 
-        return {
-            "status": "Completed" if payment_details.payment_status else "Failed",
-            "message": "Payment data retrieved successfully",
-            "amount": payment_details.payable_amount,
-            "transaction_id": str(payment_details.transaction_id),
-            "error_message": payment_details.failure_reason if not payment_details.payment_status else None,
-            "course_title": payment_details.course.title if payment_details.course else None,
-            "customer_name": payment_details.courseregistration.full_name if payment_details.courseregistration else None,
-            "customer_email": payment_details.courseregistration.email if payment_details.courseregistration else None,
-            "customer_phone": payment_details.courseregistration.phone_number if payment_details.courseregistration else None,
-        }
+import razorpay
 
+@paymentrouter.get("/verify/{order_id}")
+def verify_payment(request, order_id):
+    client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
-    except payment.DoesNotExist:
-        return Response(
-            {
-                "status": "Failed",
-                "message": "Payment verification failed",
-                "error_message": "Invalid order ID"
-            },
-            status=404
-        )
+    # Get all payments for this order
+    payments = client.order.payments(order_id)
+    successful_payment = None
+    for p in payments['items']:
+        if p['status'] == 'captured':
+            successful_payment = p
+            break
 
-    except Exception as e:
-        return Response(
-            {
-                "status": "Failed",
-                "message": "An error occurred during payment verification",
-                "error_message": str(e)
-            },
-            status=500
-        )
+    if successful_payment:
+        return JsonResponse({
+            "status": "Success",
+            "message": "Payment verified",
+            "payment_id": successful_payment["id"],
+            "amount": successful_payment["amount"] / 100
+        })
+    else:
+        return JsonResponse({
+            "status": "Failed",
+            "message": "Payment not captured yet"
+        })

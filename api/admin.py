@@ -3,6 +3,9 @@ from api.models.courses import Courses
 from api.models.discountcode import DiscountCode
 from api.models.registration import CourseRegistration
 from api.models.payment import payment
+from api.models.testimonial import Testimonial
+from api.models.team import TeamMember
+
 
 # Register your models here.
 
@@ -23,3 +26,7 @@ class CoursesAdmin(admin.ModelAdmin):
         return "No image uploaded"
     image_preview.allow_tags = True
     image_preview.short_description = "Image Preview"
+    
+
+admin.site.register(Testimonial)
+admin.site.register(TeamMember)
