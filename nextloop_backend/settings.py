@@ -62,6 +62,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
 ]
 
 
@@ -115,7 +116,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'nextloop_backend.wsgi.application'
+ASGI_APPLICATION = 'nextloop_backend.asgi.application'
 
 import dj_database_url
 
@@ -200,5 +201,41 @@ EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_USE_TLS = True
 EMAIL_PORT = 587
 EMAIL_HOST_USER = 'nexloopedutech@gmail.com'
-EMAIL_HOST_PASSWORD = 'uqqc rxej oley lias'
+EMAIL_HOST_PASSWORD = 'uqqcrxejoleylias'
 DEFAULT_FROM_EMAIL = 'Nexloop'
+
+
+import os
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+STATIC_URL = '/static/'
+
+STATICFILES_DIRS = [
+    os.path.join(BASE_DIR, 'static'),
+]
+
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+SESSION_COOKIE_SECURE = True  # Set to True for HTTPS-only sessions
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Strict'
+
+
+# Use session-based CSRF protection
+CSRF_USE_SESSIONS = True
+
+# X-Forwarded-Port header support for reverse proxy
+USE_X_FORWARDED_PORT = True
+
+# SSL header for reverse proxy
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+CSRF_TRUSTED_ORIGINS = [
+    "https://www.api.nexloopedutech.in",
+    "https://api.nexloopedutech.in",
+    "http://103.235.106.90",
+]
+
+
+
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
